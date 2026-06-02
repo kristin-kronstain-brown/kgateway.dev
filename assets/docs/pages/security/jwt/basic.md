@@ -229,41 +229,7 @@ EOF
 The `audiences` and `tokenSource` fields change how clients must send requests, so they are commented out above. If you uncomment `tokenSource`, send the token in the matching header or query parameter instead of the `Authorization` header. If you uncomment `audiences`, requests must use a token that includes a matching `aud` claim; the sample token in this guide has no `aud` claim.
 {{< /callout >}}
 
-## (Optional) Restrict access with claim-based rules {#rbac}
-
-After a JWT is verified, you can use the `rbac` field on the {{< reuse "docs/snippets/trafficpolicy.md" >}} to allow or deny requests based on the token's claims. The JWT filter writes the verified token payload to Envoy dynamic metadata, which you reference from a [Common Expression Language (CEL)](https://github.com/google/cel-spec) expression. Because the rules depend on a verified token, configure `rbac` together with `jwtAuth` in the same policy.
-
-1. Update the {{< reuse "docs/snippets/trafficpolicy.md" >}} to add an `rbac` policy. The following example allows only requests whose JWT has a `team` claim of `dev`. All other requests are denied. The sample token from the previous steps includes `"team": "dev"`, so it is allowed.
-
-   ```yaml
-   kubectl apply -f- <<EOF
-   apiVersion: {{< reuse "docs/snippets/trafficpolicy-apiversion.md" >}}
-   kind: {{< reuse "docs/snippets/trafficpolicy.md" >}}
-   metadata:
-     name: jwt-policy
-     namespace: {{< reuse "docs/snippets/namespace.md" >}}
-   spec:
-     targetRefs:
-       - group: gateway.networking.k8s.io
-         kind: Gateway
-         name: http
-     jwtAuth:
-       extensionRef:
-         name: selfminted-jwt
-     rbac:
-       action: Allow
-       policy:
-         matchExpressions:
-           - "metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['team'] == 'dev'"
-   EOF
-   ```
-
-   | Field | Description |
-   | ----- | ----- |
-   | `rbac.action` | The action to take when a request matches the policy, either `Allow` or `Deny`. Defaults to `Allow`, which permits only matching requests and denies all others. |
-   | `rbac.policy.matchExpressions` | A list of CEL expressions. The policy matches when any one of the expressions evaluates to `true`. Reference verified JWT claims through the `envoy.filters.http.jwt_authn` filter metadata, in the form `metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['<claim>']`. |
-
-2. Send a request with the sample token from the previous steps. Because its `team` claim is `dev`, the request matches the policy and is allowed with a `200 OK` response. A request with a token whose `team` claim is not `dev`, or that has no `team` claim, is denied with a `403 Forbidden` response.
+For claim-based access control with a CEL `rbac` policy, see [Restrict access with claim-based rules](../claim-based-rbac/).
 
 ## Cleanup {#cleanup}
 
