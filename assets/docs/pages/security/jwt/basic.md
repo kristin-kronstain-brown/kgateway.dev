@@ -186,6 +186,85 @@ You can extract claims from the verified JWT and forward them as headers to the 
    }
    ```
 
+## (Optional) Customize how tokens are validated {#customize}
+
+The `jwt` configuration in the GatewayExtension supports several optional fields that change how tokens are located, validated, and forwarded. To use any of them, add the field to the GatewayExtension that you created earlier and reapply it. Add only the fields that you need, and keep the `jwks` and other settings that you already configured.
+
+| Field | Location | Description |
+| ----- | ----- | ----- |
+| `validationMode` | `spec.jwt` | Controls whether a JWT is required. `Strict` (the default) rejects requests that do not include a valid JWT. `AllowMissing` lets requests without a token through, but still rejects requests that present an invalid token. When you use `AllowMissing`, pair it with an RBAC policy to enforce authorization, because unauthenticated requests are allowed through. |
+| `audiences` | `spec.jwt.providers[]` | A list of accepted audiences. An incoming token must include an `aud` claim that matches one of these values. If omitted, the `aud` claim is not checked. |
+| `tokenSource` | `spec.jwt.providers[]` | Where to find the JWT. By default, the token is read from the `Authorization` header as a bearer token. Set `header.header` to read it from a different header (and optional `header.prefix` to strip a prefix), or `queryParameter` to read it from a URL query parameter. Exactly one of `header` or `queryParameter` can be set. |
+| `forwardToken` | `spec.jwt.providers[]` | Whether to forward the token to the upstream service. If `false` or unset, the gateway removes the token's header before it forwards the request. Set to `true` to keep the token so that the upstream service can use it. |
+
+The following GatewayExtension is a complete replacement for the one that you created earlier. You can apply it as-is: the request-changing fields (`audiences` and `tokenSource`) are commented out, so the example keeps working with the sample token and requests from the previous steps. Uncomment the fields that you want to use.
+
+```yaml
+kubectl apply -f- <<EOF
+apiVersion: {{< reuse "docs/snippets/trafficpolicy-apiversion.md" >}}
+kind: GatewayExtension
+metadata:
+  name: selfminted-jwt
+  namespace: {{< reuse "docs/snippets/namespace.md" >}}
+spec:
+  jwt:
+    validationMode: Strict            # Strict (default) requires a valid JWT; AllowMissing also lets requests with no token through
+    providers:
+      - name: selfminted
+        issuer: solo.io
+        forwardToken: true            # keep the token so that the upstream service can use it
+        # audiences:                  # require a matching aud claim (the sample token has no aud claim)
+        #   - my-api
+        # tokenSource:                # read the token from a custom location instead of the Authorization header
+        #   header:
+        #     header: x-jwt
+        #     prefix: "Bearer "
+        jwks:
+          local:
+            inline: '{"keys":[{"kty":"RSA","kid":"solo-public-key-001","use":"sig","alg":"RS256","n":"AOfIaJMUm7564sWWNHaXt_hS8H0O1Ew59-nRqruMQosfQqa7tWne5lL3m9sMAkfa3Twx0LMN_7QqRDoztvV3Wa_JwbMzb9afWE-IfKIuDqkvog6s-xGIFNhtDGBTuL8YAQYtwCF7l49SMv-GqyLe-nO9yJW-6wIGoOqImZrCxjxXFzF6mTMOBpIODFj0LUZ54QQuDcD1Nue2LMLsUvGa7V1ZHsYuGvUqzvXFBXMmMS2OzGir9ckpUhrUeHDCGFpEM4IQnu-9U8TbAJxKE5Zp8Nikefr2ISIG2Hk1K2rBAc_HwoPeWAcAWUAR5tWHAxx-UXClSZQ9TMFK850gQGenUp8","e":"AQAB"}]}'
+EOF
+```
+
+{{< callout type="warning" >}}
+The `audiences` and `tokenSource` fields change how clients must send requests, so they are commented out above. If you uncomment `tokenSource`, send the token in the matching header or query parameter instead of the `Authorization` header. If you uncomment `audiences`, requests must use a token that includes a matching `aud` claim; the sample token in this guide has no `aud` claim.
+{{< /callout >}}
+
+## (Optional) Restrict access with claim-based rules {#rbac}
+
+After a JWT is verified, you can use the `rbac` field on the {{< reuse "docs/snippets/trafficpolicy.md" >}} to allow or deny requests based on the token's claims. The JWT filter writes the verified token payload to Envoy dynamic metadata, which you reference from a [Common Expression Language (CEL)](https://github.com/google/cel-spec) expression. Because the rules depend on a verified token, configure `rbac` together with `jwtAuth` in the same policy.
+
+1. Update the {{< reuse "docs/snippets/trafficpolicy.md" >}} to add an `rbac` policy. The following example allows only requests whose JWT has a `team` claim of `dev`. All other requests are denied. The sample token from the previous steps includes `"team": "dev"`, so it is allowed.
+
+   ```yaml
+   kubectl apply -f- <<EOF
+   apiVersion: {{< reuse "docs/snippets/trafficpolicy-apiversion.md" >}}
+   kind: {{< reuse "docs/snippets/trafficpolicy.md" >}}
+   metadata:
+     name: jwt-policy
+     namespace: {{< reuse "docs/snippets/namespace.md" >}}
+   spec:
+     targetRefs:
+       - group: gateway.networking.k8s.io
+         kind: Gateway
+         name: http
+     jwtAuth:
+       extensionRef:
+         name: selfminted-jwt
+     rbac:
+       action: Allow
+       policy:
+         matchExpressions:
+           - "metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['team'] == 'dev'"
+   EOF
+   ```
+
+   | Field | Description |
+   | ----- | ----- |
+   | `rbac.action` | The action to take when a request matches the policy, either `Allow` or `Deny`. Defaults to `Allow`, which permits only matching requests and denies all others. |
+   | `rbac.policy.matchExpressions` | A list of CEL expressions. The policy matches when any one of the expressions evaluates to `true`. Reference verified JWT claims through the `envoy.filters.http.jwt_authn` filter metadata, in the form `metadata.filter_metadata['envoy.filters.http.jwt_authn']['payload']['<claim>']`. |
+
+2. Send a request with the sample token from the previous steps. Because its `team` claim is `dev`, the request matches the policy and is allowed with a `200 OK` response. A request with a token whose `team` claim is not `dev`, or that has no `team` claim, is denied with a `403 Forbidden` response.
+
 ## Cleanup {#cleanup}
 
 ```sh
